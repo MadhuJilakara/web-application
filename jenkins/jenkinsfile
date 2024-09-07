@@ -1,0 +1,101 @@
+pipeline {
+    agent {label 'web-app'}
+
+    stages {
+        stage('Check and Remove Files') {
+            steps {
+                script {
+                    def nginxFilePath = '/etc/nginx/default.d/site.conf'
+                    def cloudwatchFilePath = '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json'
+                    
+                    def checkAndRemoveFile = { filePath ->
+                        def fileExists = sh(script: "test -f ${filePath} && echo 'true' || echo 'false'", returnStdout: true).trim()
+                        
+                        if (fileExists == 'true') {
+                            sh "sudo rm ${filePath}"
+                            echo "File ${filePath} removed."
+                        } else {
+                            echo "File ${filePath} does not exist."
+                        }
+                    }
+
+                    checkAndRemoveFile(nginxFilePath)
+                    checkAndRemoveFile(cloudwatchFilePath)
+                }
+            }
+        }
+        stage('Configure Nginx') {
+            steps {
+                // sh "sudo rm /etc/nginx/default.d/site.conf"
+                script {
+                    // Define the configuration content
+                    def configContent = '''location / {
+    proxy_pass http://127.0.0.1:5000;
+    }
+                    '''
+                                // Write the configuration content to the file
+                                sh """
+                                    echo '${configContent}' | sudo tee -a /etc/nginx/default.d/site.conf
+                                """
+                            }
+                    sh "sudo systemctl restart nginx"
+                        }
+                    }
+        
+        stage('Configure CloudWatch Metrics') {
+            steps {
+                // sh "sudo rm /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
+                script {
+                    def configContent = '''{
+    "agent": {
+        "metrics_collection_interval": 300,
+        "run_as_user": "root"
+    },
+    "metrics": {
+        "append_dimensions": {
+            "InstanceId": "${aws:InstanceId}"
+        },
+        "metrics_collected": {
+            "mem": {
+                "measurement": [
+                    "mem_used_percent"
+                ],
+                "metrics_collection_interval": 60,
+                "resources": [
+                    "*"
+                ]
+            },
+            "disk": {
+                "measurement": [
+                    "used_percent"
+                ],
+                "metrics_collection_interval": 60,
+                "resources": [
+                    "*"
+                ]
+            }
+        }
+    }
+}
+                    '''
+                                sh """
+                                    echo '${configContent}' | sudo tee -a /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+                                """
+                            }
+                    sh "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
+                        }
+                    }
+
+        stage('Clone the web-app') {
+            steps {
+                sh 'rm -rf Flask-Web-App-Tutorial'
+                sh 'git clone https://github.com/techwithtim/Flask-Web-App-Tutorial.git'
+                sh 'cd Flask-Web-App-Tutorial; pip3 install -r requirements.txt; python3 main.py'
+            }
+        }
+
+        
+    }
+}
+
+
